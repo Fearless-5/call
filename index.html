@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simple Audio Call App</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+        }
+        h1 {
+            text-align: center;
+        }
+        div {
+            text-align: center;
+            margin-top: 20px;
+        }
+        button {
+            margin: 5px;
+            padding: 10px;
+            font-size: 16px;
+        }
+        audio {
+            display: block;
+            margin: 10px auto;
+        }
+    </style>
+</head>
+<body>
+    <h1>Simple Audio Call App</h1>
+    <div>
+        <button id="startCallButton">Start Call</button>
+        <button id="hangUpButton">Hang Up</button>
+    </div>
+    <audio id="localAudio" autoplay></audio>
+    <audio id="remoteAudio" autoplay></audio>
+    <script src="https://cdn.socket.io/4.0.0/socket.io.min.js"></script>
+    <script>
+        // Replace with your server URL
+        const socket = io('https://audio-call-8gc8.onrender.com');
+
+        const startCallButton = document.getElementById('startCallButton');
+        const hangUpButton = document.getElementById('hangUpButton');
+        const localAudio = document.getElementById('localAudio');
+        const remoteAudio = document.getElementById('remoteAudio');
+
+        let localStream;
+        let peerConnection;
+        const servers = {
+            iceServers: [
+                {
+                    urls: 'stun:stun.l.google.com:19302'
+                }
+            ]
+        };
+
+        startCallButton.addEventListener('click', startCall);
+        hangUpButton.addEventListener('click', hangUp);
+
+        async function startCall() {
+            try {
+                localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+                localAudio.srcObject = localStream;
+
+                peerConnection = new RTCPeerConnection(servers);
+                peerConnection.onicecandidate = handleIceCandidate;
+                peerConnection.ontrack = handleRemoteStream;
+                localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+
+                const offer = await peerConnection.createOffer();
+                await peerConnection.setLocalDescription(offer);
+
+                socket.emit('offer', peerConnection.localDescription);
+            } catch (error) {
+                console.error('Error accessing media devices.', error);
+            }
+        }
+
+        socket.on('offer', async (offer) => {
+            if (!peerConnection) {
+                await startCall();
+            }
+            try {
+                await peerConnection.setRemoteDescription(offer);
+                const answer = await peerConnection.createAnswer();
+                await peerConnection.setLocalDescription(answer);
+                socket.emit('answer', peerConnection.localDescription);
+            } catch (error) {
+                console.error('Error handling offer', error);
+            }
+        });
+
+        socket.on('answer', async (answer) => {
+            try {
+                await peerConnection.setRemoteDescription(answer);
+            } catch (error) {
+                console.error('Error handling answer', error);
+            }
+        });
+
+        socket.on('ice-candidate', async (candidate) => {
+            try {
+                await peerConnection.addIceCandidate(candidate);
+            } catch (error) {
+                console.error('Error adding received ice candidate', error);
+            }
+        });
+
+        function handleIceCandidate(event) {
+            if (event.candidate) {
+                socket.emit('ice-candidate', event.candidate);
+            }
+        }
+
+        function handleRemoteStream(event) {
+            if (event.streams && event.streams[0]) {
+                remoteAudio.srcObject = event.streams[0];
+            }
+        }
+
+        function hangUp() {
+            if (peerConnection) {
+                peerConnection.close();
+                peerConnection = null;
+            }
+            if (localStream) {
+                localStream.getTracks().forEach(track => track.stop());
+            }
+            localAudio.srcObject = null;
+            remoteAudio.srcObject = null;
+            socket.emit('hangup');
+        }
+
+        socket.on('hangup', () => {
+            hangUp();
+        });
+    </script>
+</body>
+</html>
+
